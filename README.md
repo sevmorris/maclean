@@ -1,13 +1,13 @@
 # maclean — unified macOS cleanup
 
-A single, interactive script to tidy up a developer’s macOS environment: brew cruft, language caches, Xcode DerivedData/Archives, Docker leftovers, legacy Box folders, and more. Designed to be safe (HOME‑scoped) and transparent (per‑step confirmations, per‑step size reclaimed).
+A single, interactive script to tidy up a developer’s macOS environment: brew cruft, language caches, Xcode DerivedData/Archives, Docker leftovers, legacy Box folders, and more. Designed to be safe (HOME-scoped) and transparent (per-step confirmations, per-step size reclaimed).
 
 ## Quick start
 
 ```bash
 # clone to your Projects folder
 mkdir -p ~/Projects && cd ~/Projects
-git clone <YOUR_REMOTE> maclean
+git clone https://github.com/sevmorris/maclean maclean
 cd maclean
 
 # link into ~/.local/bin so you can run 'maclean' from anywhere
@@ -17,9 +17,9 @@ make doctor    # optional sanity check
 
 Now run it from any directory:
 ```bash
-maclean     # interactive mode
-maclean -y  # non-interactive (yes to all)
-maclean -n  # dry-run (simulate)
+maclean           # interactive mode
+maclean -y        # non-interactive (yes to all)
+maclean -n        # dry-run (simulate)
 FAST=1 maclean --fast   # skip slower steps
 maclean --no-docker     # skip Docker
 maclean --no-xcode      # skip Xcode
