@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # maclean.sh — unified macOS cleanup
-# v1.1.3 2025-11-04
-# Changelog v1.1.3:
-# - Fix: ENTER now shows "(no input — defaulting to No)" and step reports "skipped by user"
-# - Add: --version prints version; banner prints version at start
-# - Add: --debug prints rc/CONFIRM_LAST per step
+# v1.1.4 2025-11-04
+# Changelog v1.1.4:
+# - Fix: timed_step no longer runs steps in a subshell; ENTER now reliably reports "skipped by user"
+# - Change: step functions set STEP_RECLAIMED instead of echoing; avoid duplicate "Skipped ..." lines
+# - Keep: --version, --debug behavior
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -28,7 +28,8 @@ FAST="${FAST:-0}"
 SYSTEM=0
 CONFIRM_LAST=""
 DEBUG=0
-VERSION="v1.1.3"
+VERSION="v1.1.4"
+STEP_RECLAIMED=0
 
 usage() {
   cat <<EOF
@@ -114,18 +115,23 @@ safe_rm() {
   echo "$before"
 }
 
+# --- core runner (no subshell) ---
 timed_step() {
   local title="$1"; shift
   local start_ts; start_ts=$(date +%s)
   printf "%s— %s%s\n" "$blue" "$title" "$reset"
+
   CONFIRM_LAST=""
-  local reclaimed; reclaimed=$("$@" || true)
-  local rc=$?
+  STEP_RECLAIMED=0
+
+  "$@"; local rc=$?
+
   local end_ts; end_ts=$(date +%s)
   local dur=$((end_ts - start_ts))
+  local reclaimed="$STEP_RECLAIMED"
 
   if [[ $DEBUG -eq 1 ]]; then
-    echo "  [debug] rc=${rc} confirm=${CONFIRM_LAST}"
+    echo "  [debug] rc=${rc} confirm=${CONFIRM_LAST} reclaimed=${reclaimed}"
   fi
 
   if [[ "$CONFIRM_LAST" == "empty" || "$CONFIRM_LAST" == "no" || "$CONFIRM_LAST" == "invalid" ]]; then
@@ -144,7 +150,9 @@ timed_step() {
   fi
 }
 
+# --- steps (set STEP_RECLAIMED, do not echo) ---
 brew_cleanup() {
+  STEP_RECLAIMED=0
   if command -v brew >/dev/null 2>&1; then
     if confirm "Run brew cleanup & autoremove?"; then
       if [[ $DRY_RUN -eq 1 ]]; then
@@ -154,53 +162,46 @@ brew_cleanup() {
         brew cleanup -s || true
         brew autoremove || true
       fi
-      echo 0; return 0
-    else
-      warn "Skipped brew cleanup"; echo 0; return 0
     fi
   else
-    warn "Homebrew not found; skipping"; echo 0; return 0
+    warn "Homebrew not found; skipping"
   fi
 }
 
 purge_user_caches() {
+  STEP_RECLAIMED=0
   if confirm "Purge user caches under ~/Library/Caches and ~/.cache?"; then
     local targets=("$HOME/Library/Caches"/* "$HOME/.cache"/*)
-    safe_rm "${targets[@]}"
-  else
-    warn "Skipped user cache purge"; echo 0
+    STEP_RECLAIMED=$(safe_rm "${targets[@]}")
   fi
 }
 
 purge_user_logs() {
+  STEP_RECLAIMED=0
   if confirm "Purge user logs under ~/Library/Logs?"; then
     local targets=("$HOME/Library/Logs"/*)
-    safe_rm "${targets[@]}"
-  else
-    warn "Skipped log purge"; echo 0
+    STEP_RECLAIMED=$(safe_rm "${targets[@]}")
   fi
 }
 
 purge_crash_logs() {
+  STEP_RECLAIMED=0
   if confirm "Remove DiagnosticReports and CrashReporter logs under ~/Library/Logs?"; then
     local targets=("$HOME/Library/Logs/DiagnosticReports"/* "$HOME/Library/Logs/CrashReporter"/*)
-    safe_rm "${targets[@]}"
-  else
-    warn "Skipped crash/diagnostic logs"; echo 0
+    STEP_RECLAIMED=$(safe_rm "${targets[@]}")
   fi
 }
 
 purge_venvs() {
+  STEP_RECLAIMED=0
   if confirm "Remove Python virtualenvs under ~/.venvs?"; then
-    safe_rm "$HOME/.venvs"
-  else
-    warn "Skipped virtualenv removal"; echo 0
+    STEP_RECLAIMED=$(safe_rm "$HOME/.venvs")
   fi
 }
 
 purge_python_caches() {
+  STEP_RECLAIMED=0
   if confirm "Clear pip/pipx caches?"; then
-    local reclaimed=0
     if command -v python3 >/dev/null 2>&1; then
       if [[ $DRY_RUN -eq 1 ]]; then
         echo "  (dry-run) python3 -m pip cache purge"
@@ -210,15 +211,13 @@ purge_python_caches() {
     fi
     local px="$HOME/Library/Caches/pipx"
     if [[ -d "$px" ]]; then
-      reclaimed=$((reclaimed + $(safe_rm "$px")))
+      local b; b=$(safe_rm "$px"); STEP_RECLAIMED=$((STEP_RECLAIMED + b))
     fi
-    echo "$reclaimed"
-  else
-    warn "Skipped Python cache purge"; echo 0
   fi
 }
 
 purge_node_caches() {
+  STEP_RECLAIMED=0
   if confirm "Clear Node/Corepack/npm/pnpm/yarn/bun caches?"; then
     local targets=(
       "$HOME/Library/Caches/Corepack"
@@ -229,35 +228,28 @@ purge_node_caches() {
       "$HOME/.pnpm-store"
       "$HOME/Library/Caches/bun"
     )
-    safe_rm "${targets[@]}"
-  else
-    warn "Skipped Node ecosystem cache purge"; echo 0
+    STEP_RECLAIMED=$(safe_rm "${targets[@]}")
   fi
 }
 
 xcode_cleanup() {
-  [[ $XCODE_OK -eq 1 ]] || { warn "Xcode cleanup disabled"; echo 0; return 0; }
+  STEP_RECLAIMED=0
+  [[ $XCODE_OK -eq 1 ]] || { warn "Xcode cleanup disabled"; return 0; }
+  [[ -d "$HOME/Library/Developer/Xcode" ]] || { ok "No Xcode developer folder found"; return 0; }
   if [[ $FAST -eq 1 ]]; then warn "FAST=1 → Skipping Xcode Archives"; fi
-  if [[ -d "$HOME/Library/Developer/Xcode" ]]; then
-    local targets=("$HOME/Library/Developer/Xcode/DerivedData")
-    if [[ $FAST -eq 0 ]]; then
-      targets+=("$HOME/Library/Developer/Xcode/Archives")
-    fi
-    if confirm "Remove Xcode DerivedData${FAST:+ (Archives skipped by FAST)}?"; then
-      safe_rm "${targets[@]}"
-    else
-      warn "Skipped Xcode cleanup"; echo 0
-    fi
-  else
-    ok "No Xcode developer folder found"; echo 0
+  local targets=("$HOME/Library/Developer/Xcode/DerivedData")
+  [[ $FAST -eq 0 ]] && targets+=("$HOME/Library/Developer/Xcode/Archives")
+  if confirm "Remove Xcode DerivedData${FAST:+ (Archives skipped by FAST)}?"; then
+    STEP_RECLAIMED=$(safe_rm "${targets[@]}")
   fi
 }
 
 docker_cleanup() {
-  [[ $DOCKER_OK -eq 1 ]] || { warn "Docker cleanup disabled"; echo 0; return 0; }
+  STEP_RECLAIMED=0
+  [[ $DOCKER_OK -eq 1 ]] || { warn "Docker cleanup disabled"; return 0; }
   if command -v docker >/dev/null 2>&1; then
     if [[ $FAST -eq 1 ]]; then
-      warn "FAST=1 → Skipping docker system prune"; echo 0; return 0
+      warn "FAST=1 → Skipping docker system prune"; return 0
     fi
     if confirm "Prune unused Docker data (images/containers/build cache)?"; then
       if [[ $DRY_RUN -eq 1 ]]; then
@@ -265,40 +257,36 @@ docker_cleanup() {
       else
         docker system prune -af --volumes || true
       fi
-    else
-      warn "Skipped Docker prune"
     fi
   else
-    warn "Docker not found; skipping"; echo 0
+    warn "Docker not found; skipping"
   fi
-  echo 0
 }
 
 trash_empty() {
+  STEP_RECLAIMED=0
   if confirm "Empty your user Trash? (~/.Trash)"; then
-    safe_rm "$HOME/.Trash"/*
-  else
-    warn "Skipped Trash empty"; echo 0
+    STEP_RECLAIMED=$(safe_rm "$HOME/.Trash"/*)
   fi
 }
 
 box_legacy() {
+  STEP_RECLAIMED=0
   if confirm "Remove legacy .Box_* folders under $HOME (depth ≤ 2)?"; then
     mapfile -t BOX_LEGACY < <(find "$HOME" -maxdepth 2 -type d -name ".Box_*" -print0 | xargs -0 -I{} echo "{}")
     if [[ "${#BOX_LEGACY[@]}" -gt 0 ]]; then
       printf "  Found %d legacy folders\n" "${#BOX_LEGACY[@]}"
-      safe_rm "${BOX_LEGACY[@]}"
+      STEP_RECLAIMED=$(safe_rm "${BOX_LEGACY[@]}")
     else
-      ok "No legacy .Box_* folders found"; echo 0
+      ok "No legacy .Box_* folders found"
     fi
-  else
-    warn "Skipped Box legacy check"; echo 0
   fi
 }
 
 tm_snapshots() {
-  if [[ $SYSTEM -ne 1 ]]; then warn "--system not set; skipping Time Machine snapshots"; echo 0; return 0; fi
-  if ! confirm "Purge local Time Machine snapshots? (sudo)"; then warn "Skipped TM snapshots"; echo 0; return 0; fi
+  STEP_RECLAIMED=0
+  [[ $SYSTEM -ne 1 ]] && { warn "--system not set; skipping Time Machine snapshots"; return 0; }
+  if ! confirm "Purge local Time Machine snapshots? (sudo)"; then return 0; fi
   need_sudo || true
   if [[ $DRY_RUN -eq 1 ]]; then
     echo "  (dry-run) sudo tmutil listlocalsnapshots /"
@@ -306,17 +294,17 @@ tm_snapshots() {
   fi
   local ids
   ids=$(tmutil listlocalsnapshots / 2>/dev/null | awk -F'.' '/LocalSnapshots/ {print $(NF-1)}; /^[0-9]{4}-[0-9]{2}-[0-9]{2}/ {print $1}')
-  if [[ -z "$ids" ]]; then ok "No local Time Machine snapshots found"; echo 0; return 0; fi
+  [[ -z "$ids" ]] && { ok "No local Time Machine snapshots found"; return 0; }
   while IFS= read -r id; do
     [[ -z "$id" ]] && continue
     echo "  Deleting snapshot: $id"
     sudo tmutil deletelocalsnapshots "$id" || true
   done <<< "$ids"
-  echo 0
 }
 
 rebuild_services() {
-  if [[ $SYSTEM -ne 1 ]]; then warn "--system not set; skipping LS/QuickLook/Spotlight"; echo 0; return 0; fi
+  STEP_RECLAIMED=0
+  [[ $SYSTEM -ne 1 ]] && { warn "--system not set; skipping LS/QuickLook/Spotlight"; return 0; }
   if confirm "Rebuild LaunchServices & Quick Look caches? (sudo not required)"; then
     local lsreg="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
     if [[ $DRY_RUN -eq 1 ]]; then
@@ -326,10 +314,7 @@ rebuild_services() {
       [[ -x "$lsreg" ]] && "$lsreg" -kill -r -domain local -domain system -domain user || true
       qlmanage -r cache >/dev/null 2>&1 || true
     fi
-  else
-    warn "Skipped LaunchServices/Quick Look rebuild"
   fi
-
   if confirm "Rebuild Spotlight index for / ? (sudo, can be slow)"; then
     need_sudo || true
     if [[ $DRY_RUN -eq 1 ]]; then
@@ -337,14 +322,12 @@ rebuild_services() {
     else
       sudo mdutil -E / || true
     fi
-  else
-    warn "Skipped Spotlight reindex"
   fi
-  echo 0
 }
 
 flush_dns() {
-  if [[ $SYSTEM -ne 1 ]]; then warn "--system not set; skipping DNS flush"; echo 0; return 0; fi
+  STEP_RECLAIMED=0
+  [[ $SYSTEM -ne 1 ]] && { warn "--system not set; skipping DNS flush"; return 0; }
   if confirm "Flush DNS cache? (sudo)"; then
     need_sudo || true
     if [[ $DRY_RUN -eq 1 ]]; then
@@ -353,14 +336,12 @@ flush_dns() {
       sudo dscacheutil -flushcache || true
       sudo killall -HUP mDNSResponder || true
     fi
-  else
-    warn "Skipped DNS flush"
   fi
-  echo 0
 }
 
 memory_purge() {
-  if [[ $SYSTEM -ne 1 ]]; then warn "--system not set; skipping memory purge"; echo 0; return 0; fi
+  STEP_RECLAIMED=0
+  [[ $SYSTEM -ne 1 ]] && { warn "--system not set; skipping memory purge"; return 0; }
   if confirm "Purge inactive memory? (sudo, may stall briefly)"; then
     need_sudo || true
     if [[ $DRY_RUN -eq 1 ]]; then
@@ -368,13 +349,11 @@ memory_purge() {
     else
       sudo purge || true
     fi
-  else
-    warn "Skipped memory purge"
   fi
-  echo 0
 }
 
 report_summary() {
+  STEP_RECLAIMED=0
   echo "— Generating summary report"
   if command -v du >/dev/null 2>&1; then
     echo "Top 10 directories under $HOME by size:"
@@ -385,7 +364,6 @@ report_summary() {
     echo "Largest cache folders:"
     du -sh "$HOME/Library/Caches"/* 2>/dev/null | sort -hr | head -n 10
   fi
-  echo 0
 }
 
 main() {
