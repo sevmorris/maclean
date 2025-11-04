@@ -2,22 +2,37 @@
 
 A single, interactive script to tidy up a developer’s macOS environment: brew cruft, language caches, Xcode DerivedData/Archives, Docker leftovers, legacy Box folders, and more. Designed to be safe (HOME-scoped) and transparent (per-step confirmations, per-step size reclaimed).
 
-**v1.1 adds:** crash/diagnostic log cleanup, optional Time Machine local snapshot purge, LaunchServices/Quick Look/Spotlight rebuild, DNS flush, memory purge, and an end-of-run summary report.
+## Quick install (users)
 
-## Quick start
+Install to `~/bin` so you can run `maclean` from anywhere:
 
 ```bash
-# clone to your Projects folder
-mkdir -p ~/Projects && cd ~/Projects
-git clone https://github.com/sevmorris/maclean maclean
-cd maclean
+mkdir -p "$HOME/bin"
+curl -fsSL https://raw.githubusercontent.com/sevmorris/maclean/main/maclean.sh -o "$HOME/bin/maclean"
+chmod +x "$HOME/bin/maclean"
 
-# link into ~/.local/bin so you can run 'maclean' from anywhere
-make install   # or: ./install.sh
-make doctor    # optional sanity check
+# ensure ~/bin is on your PATH (zsh example)
+# echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc && exec zsh
+
+maclean --version
 ```
 
-Now run it from any directory:
+**Upgrade:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/sevmorris/maclean/main/maclean.sh -o "$HOME/bin/maclean"
+chmod +x "$HOME/bin/maclean"
+```
+
+**Uninstall:**
+```bash
+rm -f "$HOME/bin/maclean"
+```
+
+> Tip: to pin a specific release tag, swap `main` for a tag:
+> `https://raw.githubusercontent.com/sevmorris/maclean/v1.1.3/maclean.sh`
+
+## Usage
+
 ```bash
 maclean                   # interactive mode
 maclean -y                # non-interactive (yes to all)
@@ -34,35 +49,36 @@ maclean --system          # enable system-level tasks (sudo)
 - **User caches/logs**: `~/Library/Caches`, `~/.cache`, `~/Library/Logs`
 - **Crash/diagnostic logs**: `~/Library/Logs/DiagnosticReports`, `~/Library/Logs/CrashReporter`
 - **Python**: `~/.venvs`, `pip`/`pipx` caches
-- **Node ecosystem**: Corepack/npm/pnpm/yarn/bun caches (no global uninstallations)
+- **Node ecosystem**: Corepack/npm/pnpm/yarn/bun caches
 - **Xcode**: `DerivedData` and (unless `--fast`) `Archives`
 - **Docker**: `docker system prune -af --volumes` (skipped in `--fast`)
 - **Trash**: `~/.Trash`
-- **Legacy Box**: `.Box_*` folders under `$HOME` (depth ≤ 2)
+- **Legacy Box**: `.Box_*` under `$HOME` (depth ≤ 2)
 
-## System-level (with `--system`)
+**System-level (with `--system`):**
+- **Time Machine** local snapshots
+- Rebuild **LaunchServices** & **Quick Look** caches, optional **Spotlight** reindex
+- **Flush DNS** cache
+- **Memory purge**
 
-- **Time Machine**: purge local snapshots (`tmutil deletelocalsnapshots`)
-- **LaunchServices/Quick Look**: rebuild caches (`lsregister`, `qlmanage`)
-- **Spotlight**: reindex `/` (`mdutil -E /`) (can be slow)
-- **DNS cache**: flush (`dscacheutil`, `mDNSResponder`)
-- **Memory purge**: `purge`
+All steps are confirmed interactively; dry-run prints actions only.
 
-> All system tasks require confirmation; many use `sudo`. `-n/--dry-run` prints the actions instead of executing.
+## For developers (this repo)
 
-## Make targets
-
-- `make install` – symlink `maclean` into `~/.local/bin`
-- `make uninstall` – remove the symlink
-- `make doctor` – verify PATH and basic prereqs
-- `make test`/`make dry-run` – run `FAST=1 maclean -n --fast`
-
-## Uninstall
+Clone and work in `~/Projects/maclean`, but **do not** install the dev copy onto your PATH if you want to behave like a typical user:
 
 ```bash
-make uninstall
+# development clone
+mkdir -p ~/Projects && cd ~/Projects
+git clone https://github.com/sevmorris/maclean maclean
+cd maclean
+
+# run tests, edit script, commit, push, make releases
+# Users install via the curl command above.
 ```
 
-## License
-
-MIT
+> If you *do* want a local dev alias without shadowing the user install, use:
+> ```bash
+> alias maclean-dev="bash ~/Projects/maclean/maclean.sh"
+> ```
+> That keeps `maclean` pointing at `~/bin/maclean` while you iterate in the repo.
