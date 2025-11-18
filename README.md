@@ -63,6 +63,11 @@ maclean --system          # enable system-level tasks (sudo)
 
 All steps are confirmed interactively; dry-run prints actions only.
 
+**Debug mode:**
+```bash
+maclean --debug    # Show detailed error information and per-step status
+```
+
 ## For developers (this repo)
 
 Clone and work in `~/Projects/maclean`, but **do not** install the dev copy onto your PATH if you want to behave like a typical user:
@@ -82,3 +87,48 @@ cd maclean
 > alias maclean-dev="bash ~/Projects/maclean/maclean.sh"
 > ```
 > That keeps `maclean` pointing at `~/bin/maclean` while you iterate in the repo.
+
+### Development workflow
+
+**Prerequisites:**
+```bash
+# Install development tools
+brew install shellcheck bats-core
+```
+
+**Available make targets:**
+```bash
+make help        # Show all available targets
+make lint        # Run ShellCheck on scripts
+make test        # Run BATS test suite (falls back to dry-run if BATS not installed)
+make dry-run     # Run a dry-run test of the script
+make doctor      # Check PATH and prerequisites
+make install     # Link script to ~/.local/bin/maclean
+make uninstall   # Remove ~/.local/bin/maclean
+```
+
+**Testing:**
+- **BATS tests**: Located in `tests/`, covering critical functions like path validation, glob expansion, and error handling
+- **Linting**: ShellCheck ensures code quality and catches common bash pitfalls
+- **CI/CD**: GitHub Actions automatically runs tests and linting on push/PR
+
+**Running tests:**
+```bash
+# Run all tests
+make test
+
+# Run linting only
+make lint
+
+# Run a quick dry-run test
+make dry-run
+```
+
+**Contributing:**
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run `make lint` and `make test` to ensure everything passes
+5. Submit a pull request
+
+The CI pipeline will automatically verify your changes pass all tests and linting checks.
