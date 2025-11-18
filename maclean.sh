@@ -118,7 +118,15 @@ resolve_path() {
     python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "$path" 2>/dev/null || echo "$path"
   else
     # Fallback: use cd/pwd to resolve (doesn't follow symlinks, but gets absolute path)
-    (cd "$(dirname "$path")" 2>/dev/null && pwd)/$(basename "$path") 2>/dev/null || echo "$path"
+    local dir_part base_part abs_path
+    dir_part=$(cd "$(dirname "$path")" 2>/dev/null && pwd) || dir_part=""
+    base_part=$(basename "$path")
+    if [[ -n "$dir_part" ]]; then
+      abs_path="$dir_part/$base_part"
+      echo "$abs_path"
+    else
+      echo "$path"
+    fi
   fi
 }
 
