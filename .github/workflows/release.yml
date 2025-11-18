@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Verify script syntax
+        run: |
+          bash -n maclean.sh
+          bash -n install.sh
+      
+      - name: Run ShellCheck
+        run: |
+          brew install shellcheck
+          shellcheck -S error maclean.sh install.sh
+      
+      - name: Create release notes
+        id: release_notes
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "## Release $TAG" > release_notes.md
+          echo "" >> release_notes.md
+          echo "### Changes" >> release_notes.md
+          git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD >> release_notes.md || echo "- See git log" >> release_notes.md
+          cat release_notes.md
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: release_notes.md
+          files: |
+            maclean.sh
+            README.md
+            LICENSE
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

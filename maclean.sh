@@ -21,6 +21,12 @@ ok()   { printf "%s✓ %s%s\n" "$green" "$*" "$reset"; }
 warn() { printf "%s⚠ %s%s\n" "$yellow" "$*" "$reset"; }
 err()  { printf "%s✗ %s%s\n" "$red" "$*" "$reset" >&2; }
 
+log_error() {
+  ((ERROR_COUNT++))
+  ERROR_LOG+=("$1")
+  [[ $DEBUG -eq 1 ]] && err "$1"
+}
+
 # --- opts ---
 YES=0
 DRY_RUN=0
@@ -30,6 +36,8 @@ CONFIRM_LAST=""
 DEBUG=0
 VERSION="v1.1.4"
 STEP_RECLAIMED=0
+ERROR_COUNT=0
+ERROR_LOG=()
 
 usage() {
   cat <<EOF
@@ -95,22 +103,51 @@ du_bytes() {
   local sum=0 k
   if [[ $# -eq 0 ]]; then echo 0; return; fi
   while IFS= read -r -d '' p; do
+    [[ ! -e "$p" ]] && continue  # Skip if already deleted or doesn't exist
     k=$(du -sk "$p" 2>/dev/null | awk '{print $1}')
-    [[ -n "$k" ]] && sum=$((sum + k))
+    [[ -n "$k" && "$k" =~ ^[0-9]+$ ]] && sum=$((sum + k))
   done < <(printf '%s\0' "$@")
   echo $((sum * 1024))
+}
+
+# Resolve path to absolute, following symlinks (macOS-compatible)
+resolve_path() {
+  local path="$1"
+  # Use Python for reliable symlink resolution on macOS
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "$path" 2>/dev/null || echo "$path"
+  else
+    # Fallback: use cd/pwd to resolve (doesn't follow symlinks, but gets absolute path)
+    (cd "$(dirname "$path")" 2>/dev/null && pwd)/$(basename "$path") 2>/dev/null || echo "$path"
+  fi
 }
 
 safe_rm() {
   if [[ $# -eq 0 ]]; then echo 0; return; fi
   for p in "$@"; do
-    [[ "$p" == "$HOME"* ]] || { err "Refusing to touch non-home path: $p"; return 3; }
+    # Skip empty glob results (literal asterisk in path means glob didn't expand)
+    [[ "$p" == *"/*" ]] && continue
+    # Resolve to absolute path, following symlinks
+    local real_path
+    real_path=$(resolve_path "$p")
+    # Ensure resolved path is within HOME
+    [[ "$real_path" == "$HOME"/* ]] || {
+      err "Refusing to touch non-home path: $p (resolved: $real_path)"
+      log_error "Path validation failed: $p -> $real_path"
+      return 3
+    }
   done
   local before; before=$(du_bytes "$@")
   if [[ $DRY_RUN -eq 1 ]]; then
-    for p in "$@"; do echo "  (dry-run) rm -rf $p"; done
+    for p in "$@"; do
+      [[ "$p" == *"/*" ]] && continue
+      echo "  (dry-run) rm -rf $p"
+    done
   else
-    rm -rf "$@"
+    for p in "$@"; do
+      [[ "$p" == *"/*" ]] && continue
+      rm -rf "$p" || log_error "Failed to remove: $p"
+    done
   fi
   echo "$before"
 }
@@ -171,24 +208,62 @@ brew_cleanup() {
 purge_user_caches() {
   STEP_RECLAIMED=0
   if confirm "Purge user caches under ~/Library/Caches and ~/.cache?"; then
-    local targets=("$HOME/Library/Caches"/* "$HOME/.cache"/*)
-    STEP_RECLAIMED=$(safe_rm "${targets[@]}")
+    local targets=()
+    # Safely expand globs only if directories exist
+    if [[ -d "$HOME/Library/Caches" ]]; then
+      for item in "$HOME/Library/Caches"/*; do
+        [[ -e "$item" ]] && targets+=("$item")
+      done
+    fi
+    if [[ -d "$HOME/.cache" ]]; then
+      for item in "$HOME/.cache"/*; do
+        [[ -e "$item" ]] && targets+=("$item")
+      done
+    fi
+    if [[ ${#targets[@]} -gt 0 ]]; then
+      STEP_RECLAIMED=$(safe_rm "${targets[@]}")
+    else
+      ok "No cache directories found to clean"
+    fi
   fi
 }
 
 purge_user_logs() {
   STEP_RECLAIMED=0
   if confirm "Purge user logs under ~/Library/Logs?"; then
-    local targets=("$HOME/Library/Logs"/*)
-    STEP_RECLAIMED=$(safe_rm "${targets[@]}")
+    local targets=()
+    if [[ -d "$HOME/Library/Logs" ]]; then
+      for item in "$HOME/Library/Logs"/*; do
+        [[ -e "$item" ]] && targets+=("$item")
+      done
+    fi
+    if [[ ${#targets[@]} -gt 0 ]]; then
+      STEP_RECLAIMED=$(safe_rm "${targets[@]}")
+    else
+      ok "No log directories found to clean"
+    fi
   fi
 }
 
 purge_crash_logs() {
   STEP_RECLAIMED=0
   if confirm "Remove DiagnosticReports and CrashReporter logs under ~/Library/Logs?"; then
-    local targets=("$HOME/Library/Logs/DiagnosticReports"/* "$HOME/Library/Logs/CrashReporter"/*)
-    STEP_RECLAIMED=$(safe_rm "${targets[@]}")
+    local targets=()
+    if [[ -d "$HOME/Library/Logs/DiagnosticReports" ]]; then
+      for item in "$HOME/Library/Logs/DiagnosticReports"/*; do
+        [[ -e "$item" ]] && targets+=("$item")
+      done
+    fi
+    if [[ -d "$HOME/Library/Logs/CrashReporter" ]]; then
+      for item in "$HOME/Library/Logs/CrashReporter"/*; do
+        [[ -e "$item" ]] && targets+=("$item")
+      done
+    fi
+    if [[ ${#targets[@]} -gt 0 ]]; then
+      STEP_RECLAIMED=$(safe_rm "${targets[@]}")
+    else
+      ok "No crash log files found to clean"
+    fi
   fi
 }
 
@@ -401,6 +476,14 @@ main() {
   fi
 
   timed_step "Summary report"            report_summary
+
+  if [[ $ERROR_COUNT -gt 0 ]]; then
+    warn "Cleanup finished with $ERROR_COUNT error(s)"
+    [[ $DEBUG -eq 1 ]] && {
+      echo "Error log:"
+      printf "  %s\n" "${ERROR_LOG[@]}"
+    }
+  fi
 
   if [[ $DRY_RUN -eq 1 ]]; then
     warn "Dry-run complete. Re-run without -n to apply."

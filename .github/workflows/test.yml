@@ -1,0 +1,62 @@
+name: Test and Lint
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint:
+    name: ShellCheck Linting
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install ShellCheck
+        run: brew install shellcheck
+      
+      - name: Run ShellCheck
+        run: |
+          shellcheck -S error maclean.sh install.sh
+          echo "✓ Linting passed"
+
+  test:
+    name: BATS Tests
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install BATS
+        run: brew install bats-core
+      
+      - name: Run BATS tests
+        run: |
+          bats tests/
+      
+      - name: Run dry-run test
+        run: |
+          FAST=1 ./maclean.sh -n --fast
+
+  integration:
+    name: Integration Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Make script executable
+        run: chmod +x maclean.sh
+      
+      - name: Test help and version
+        run: |
+          ./maclean.sh --help
+          ./maclean.sh --version
+      
+      - name: Test dry-run mode
+        run: |
+          FAST=1 ./maclean.sh -n --fast --no-docker --no-xcode
+      
+      - name: Test non-interactive mode
+        run: |
+          FAST=1 ./maclean.sh -y --fast --no-docker --no-xcode || true
+
